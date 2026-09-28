@@ -4,3 +4,6 @@ state.json
 drops.csv
 watcher.log
 __pycache__/
+node_modules/
+.wrangler/
+.dev.vars

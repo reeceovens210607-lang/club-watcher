@@ -1,0 +1,17 @@
+name = "club-watcher"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+# No public URL - it only runs on the timer below
+workers_dev = false
+
+[triggers]
+crons = ["* * * * *"]  # every minute
+
+# Remembers what's been seen between checks
+[[kv_namespaces]]
+binding = "STATE"
+id = "65d5f3665e7f44c394dfd5e704922230"
+
+[observability]
+enabled = true

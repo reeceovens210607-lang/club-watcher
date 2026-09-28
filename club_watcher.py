@@ -39,9 +39,8 @@ CHECK_EVERY_MINS = 3
 # clubs keep their normal pace. A boost of every club can also be started any
 # time from GitHub's "Run workflow" button.
 BOOST_EVERY_SECS = 60
-BOOST_WINDOWS = [
-    ("Daily", "11:00", 5, ["Timepiece"]),
-]
+# (Empty: the Cloudflare copy now checks TP every minute around the clock.)
+BOOST_WINDOWS = []
 
 # The house's regular nights out: (club, day, words in the event name, label).
 # An event counts if it's that club on that day OR its name has one of the
