@@ -52,6 +52,7 @@ MAIN_NIGHTS = [
     ("Cavern", "Tue", ["CAVERN TUESDAY"], "Cavern Tuesday"),
     ("Timepiece", "Wed", ["LEGENDS", "AU WEDNESDAY"], "TP Wednesday"),
     ("Timepiece", "Fri", ["SKETCH"], "SKETCH"),
+    ("Timepiece", "Sat", ["SATURDAY"], "TP Saturday"),
 ]
 
 
