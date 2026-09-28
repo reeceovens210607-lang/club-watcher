@@ -71,6 +71,8 @@ SOURCES = [
     {"club": "Timepiece", "kind": "fixr_venue", "id": 2783},
     {"club": "Fever", "kind": "fatsoma_page", "slug": "exeter-fever-3700589"},
     {"club": "Fever", "kind": "fixr_venue", "id": 2379},
+    {"club": "Fever", "kind": "fixr_venue", "id": 28528},   # 4Play's weeknights
+    {"club": "Cavern", "kind": "fixr_venue", "id": 1107},   # 4Play's Cavern Tuesday
     {"club": "Cavern", "kind": "skiddle_venue", "path": "Exeter/The-Cavern"},
 ]
 
@@ -134,9 +136,12 @@ def fixr_event_tickets(event_id):
             status = "off_sale"
         elif t.get("sold_out"):
             status = "sold_out"
+        elif t.get("not_yet_valid"):
+            status = "not_yet"  # listed, but the buy button isn't live yet
         else:
             status = "available"
-        tickets[str(t["id"])] = {"name": t["name"], "status": status}
+        name = t["name"] + (" (rep code needed)" if t.get("promo_code_required") else "")
+        tickets[str(t["id"])] = {"name": name, "status": status}
     _fixr_seen[event_id] = tickets
     return tickets
 
@@ -329,7 +334,8 @@ def compare(club, old, new, first_run):
             record_drop(club, ev, "", "new_event")
             notify(f"{club}: new event!",
                    f"{ev['name']} ({ev['when']})" +
-                   (f" - {len(on_sale)} ticket type(s) on sale NOW" if on_sale else ""),
+                   (f" - {len(on_sale)} ticket type(s) on sale NOW" if on_sale else
+                    " - not on sale yet, you'll get another alert when it is"),
                    ev["url"], main)
             for t in on_sale:
                 record_drop(club, ev, t["name"], "on_sale", t.get("on_sale_at"))
@@ -338,6 +344,7 @@ def compare(club, old, new, first_run):
                     record_drop(club, ev, t["name"], "scheduled", t.get("on_sale_at"))
             continue
 
+        live, back = [], []  # grouped, so a night's time slots send one alert
         for tid, t in ev["tickets"].items():
             before = prev["tickets"].get(tid, {}).get("status")
             now = t["status"]
@@ -346,8 +353,7 @@ def compare(club, old, new, first_run):
             if now == "available" and not first_run:
                 change = "restock" if before == "sold_out" else "on_sale"
                 record_drop(club, ev, t["name"], change, t.get("on_sale_at"))
-                notify(f"{club}: tickets {'back' if change == 'restock' else 'live'}!",
-                       f"{ev['name']} ({ev['when']}) - {t['name']}", ev["url"], main)
+                (back if change == "restock" else live).append(t["name"])
             elif now == "scheduled":
                 record_drop(club, ev, t["name"], "scheduled", t.get("on_sale_at"))
                 notify(f"{club}: drop scheduled",
@@ -356,6 +362,11 @@ def compare(club, old, new, first_run):
             elif now == "sold_out" and before == "available":
                 record_drop(club, ev, t["name"], "sold_out")
                 log(f"sold out: {club} {ev['name']} - {t['name']}")
+        for names, what in ((live, "live"), (back, "back")):
+            if names:
+                notify(f"{club}: tickets {what}!",
+                       f"{ev['name']} ({ev['when']}) - " + "; ".join(names),
+                       ev["url"], main)
 
 
 def check(state, clubs=None):
