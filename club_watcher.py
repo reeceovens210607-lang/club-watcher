@@ -43,6 +43,14 @@ BOOST_WINDOWS = [
     ("Daily", "11:00", 5, ["Timepiece"]),
 ]
 
+# The house's regular nights out. Alerts for these get a star and ntfy's
+# "urgent" priority; other nights come through as normal notifications.
+MAIN_NIGHTS = {
+    "Fever": ["Mon"],
+    "Cavern": ["Tue"],
+    "Timepiece": ["Wed", "Fri"],
+}
+
 HERE = Path(__file__).resolve().parent
 
 # Phone alerts: everyone installs the free "ntfy" app and subscribes to this
@@ -108,7 +116,7 @@ def fmt_iso(s):
 
 
 # ---------------------------------------------------------------- scrapers --
-# Each returns {event_key: {"name", "when", "url", "tickets": {id: {...}}}}
+# Each returns {event_key: {"name", "when", "day", "url", "tickets": {id: {...}}}}
 # where a ticket is {"name", "status", "on_sale_at"(optional)}.
 # status is one of: available, sold_out, scheduled, off_sale
 
@@ -139,6 +147,7 @@ def fixr_events(raw_events):
         out[f"fixr:{e['id']}"] = {
             "name": e["name"],
             "when": fmt_time(e["openTime"]),
+            "day": dt.datetime.fromtimestamp(e["openTime"]).strftime("%a"),
             "url": f"https://fixr.co/event/{e['routingPart']}",
             "tickets": fixr_event_tickets(e["id"]),
         }
@@ -192,6 +201,7 @@ def scrape_fatsoma_page(src):
         out[f"fatsoma:{e['id']}"] = {
             "name": a["name"],
             "when": fmt_iso(a["starts-at"]),
+            "day": dt.datetime.fromisoformat(a["starts-at"]).astimezone().strftime("%a"),
             "url": f"https://www.fatsoma.com/e/{a['vanity-name']}/{a.get('seo-name') or ''}",
             "tickets": tickets,
         }
@@ -215,6 +225,7 @@ def scrape_skiddle_venue(src):
         out[f"skiddle:{e['id']}"] = {
             "name": e["eventname"],
             "when": e.get("date", ""),
+            "day": dt.date.fromisoformat(e["date"]).strftime("%a") if e.get("date") else "",
             "url": "https://www.skiddle.com" + link if link.startswith("/") else link,
             "tickets": {"main": {"name": text or "Tickets", "status": status}},
         }
@@ -246,17 +257,19 @@ def already_sent(title, message):
     return False
 
 
-def notify(title, message, url=None):
+def notify(title, message, url=None, main_night=False):
     title = title.encode("ascii", "ignore").decode()  # ntfy titles must be plain text
-    log(f"ALERT  {title} - {message}")
+    log(f"ALERT  {'[MAIN NIGHT] ' if main_night else ''}{title} - {message}")
     if sys.platform == "win32":
-        _toast(title, message, url)
+        _toast(("⭐ " if main_night else "") + title, message, url)
     if NTFY_TOPIC:
         if already_sent(title, message):
             log("  (phone alert already sent by the other watcher)")
             return
         try:
-            headers = {"Title": title, "Priority": "high", "Tags": "tickets"}
+            headers = {"Title": title,
+                       "Priority": "urgent" if main_night else "default",
+                       "Tags": "star,tickets" if main_night else "tickets"}
             if url:
                 headers["Click"] = url
                 headers["Actions"] = f"view, Get tickets, {url}"
@@ -308,6 +321,7 @@ def record_drop(club, event, ticket_name, change, on_sale_at=""):
 def compare(club, old, new, first_run):
     for key, ev in new.items():
         prev = old.get(key)
+        main = ev.get("day") in MAIN_NIGHTS.get(club, [])
         if prev is None:
             if first_run:
                 continue
@@ -316,7 +330,7 @@ def compare(club, old, new, first_run):
             notify(f"{club}: new event!",
                    f"{ev['name']} ({ev['when']})" +
                    (f" - {len(on_sale)} ticket type(s) on sale NOW" if on_sale else ""),
-                   ev["url"])
+                   ev["url"], main)
             for t in on_sale:
                 record_drop(club, ev, t["name"], "on_sale", t.get("on_sale_at"))
             for t in ev["tickets"].values():
@@ -333,12 +347,12 @@ def compare(club, old, new, first_run):
                 change = "restock" if before == "sold_out" else "on_sale"
                 record_drop(club, ev, t["name"], change, t.get("on_sale_at"))
                 notify(f"{club}: tickets {'back' if change == 'restock' else 'live'}!",
-                       f"{ev['name']} ({ev['when']}) - {t['name']}", ev["url"])
+                       f"{ev['name']} ({ev['when']}) - {t['name']}", ev["url"], main)
             elif now == "scheduled":
                 record_drop(club, ev, t["name"], "scheduled", t.get("on_sale_at"))
                 notify(f"{club}: drop scheduled",
                        f"{ev['name']} - {t['name']} goes on sale {fmt_iso(t['on_sale_at'])}",
-                       ev["url"])
+                       ev["url"], main)
             elif now == "sold_out" and before == "available":
                 record_drop(club, ev, t["name"], "sold_out")
                 log(f"sold out: {club} {ev['name']} - {t['name']}")
