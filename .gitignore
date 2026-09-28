@@ -1,0 +1,6 @@
+# Private or per-machine - never upload
+ntfy_topic.txt
+state.json
+drops.csv
+watcher.log
+__pycache__/
