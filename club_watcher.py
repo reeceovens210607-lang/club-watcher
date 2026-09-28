@@ -43,13 +43,25 @@ BOOST_WINDOWS = [
     ("Daily", "11:00", 5, ["Timepiece"]),
 ]
 
-# The house's regular nights out. Alerts for these get a star and ntfy's
-# "urgent" priority; other nights come through as normal notifications.
-MAIN_NIGHTS = {
-    "Fever": ["Mon"],
-    "Cavern": ["Tue"],
-    "Timepiece": ["Wed", "Fri"],
-}
+# The house's regular nights out: (club, day, words in the event name, label).
+# An event counts if it's that club on that day OR its name has one of the
+# words. Alerts for these are starred, urgent, and lead with the label; other
+# nights come through as normal notifications.
+MAIN_NIGHTS = [
+    ("Fever", "Mon", ["LOGIC"], "LOGIC"),
+    ("Cavern", "Tue", ["CAVERN TUESDAY"], "Cavern Tuesday"),
+    ("Timepiece", "Wed", ["LEGENDS", "AU WEDNESDAY"], "TP Wednesday"),
+    ("Timepiece", "Fri", ["SKETCH"], "SKETCH"),
+]
+
+
+def main_night(club, ev):
+    """The label of the house night this event is, or None."""
+    name = ev["name"].upper()
+    for n_club, day, words, label in MAIN_NIGHTS:
+        if n_club == club and (ev.get("day") == day or any(w in name for w in words)):
+            return label
+    return None
 
 HERE = Path(__file__).resolve().parent
 
@@ -326,13 +338,15 @@ def record_drop(club, event, ticket_name, change, on_sale_at=""):
 def compare(club, old, new, first_run):
     for key, ev in new.items():
         prev = old.get(key)
-        main = ev.get("day") in MAIN_NIGHTS.get(club, [])
+        label = main_night(club, ev)
+        main = label is not None
+        who = f"{label} ({club} {ev.get('day', '')})" if label else club
         if prev is None:
             if first_run:
                 continue
             on_sale = [t for t in ev["tickets"].values() if t["status"] == "available"]
             record_drop(club, ev, "", "new_event")
-            notify(f"{club}: new event!",
+            notify(f"{who}: new event!",
                    f"{ev['name']} ({ev['when']})" +
                    (f" - {len(on_sale)} ticket type(s) on sale NOW" if on_sale else
                     " - not on sale yet, you'll get another alert when it is"),
@@ -356,7 +370,7 @@ def compare(club, old, new, first_run):
                 (back if change == "restock" else live).append(t["name"])
             elif now == "scheduled":
                 record_drop(club, ev, t["name"], "scheduled", t.get("on_sale_at"))
-                notify(f"{club}: drop scheduled",
+                notify(f"{who}: drop scheduled",
                        f"{ev['name']} - {t['name']} goes on sale {fmt_iso(t['on_sale_at'])}",
                        ev["url"], main)
             elif now == "sold_out" and before == "available":
@@ -364,7 +378,7 @@ def compare(club, old, new, first_run):
                 log(f"sold out: {club} {ev['name']} - {t['name']}")
         for names, what in ((live, "live"), (back, "back")):
             if names:
-                notify(f"{club}: tickets {what}!",
+                notify(f"{who}: tickets {what}!",
                        f"{ev['name']} ({ev['when']}) - " + "; ".join(names),
                        ev["url"], main)
 
