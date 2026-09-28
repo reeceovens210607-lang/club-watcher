@@ -66,9 +66,11 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 # ------------------------------------------------------------------ helpers --
 
-def log(msg):
+def log(msg, level=None):
     line = f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}  {msg}"
     print(line, flush=True)
+    if level and os.environ.get("GITHUB_ACTIONS"):
+        print(f"::{level}::{msg}", flush=True)  # shows on the run's summary page
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -336,7 +338,7 @@ def check(state):
         try:
             events = SCRAPERS[src["kind"]](src)
         except Exception as ex:
-            log(f"couldn't check {src['club']} ({src_id}): {ex}")
+            log(f"couldn't check {src['club']} ({src_id}): {ex}", "warning")
             continue
         first_run = src_id not in state
         old = state.get(src_id, {})
@@ -344,7 +346,8 @@ def check(state):
         # Keep events that vanished briefly so a relist isn't treated as new
         state[src_id] = {**{k: v for k, v in old.items() if k not in events}, **events}
         if first_run:
-            log(f"started watching {src['club']} ({src_id}): {len(events)} upcoming event(s)")
+            log(f"started watching {src['club']} ({src_id}): {len(events)} upcoming event(s)",
+                "notice")
         time.sleep(2)
     state["_last_check"] = time.time()
     STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
