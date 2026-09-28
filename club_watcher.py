@@ -9,7 +9,8 @@ Every drop is logged to drops.csv so you can see each club's pattern.
 
 Usage:
   python club_watcher.py          run forever (checks every CHECK_EVERY_MINS)
-  python club_watcher.py once     do a single check and exit
+  python club_watcher.py once     do a single check and exit (or a boost run,
+                                  if BOOST_HOURS is set or a boost window is on)
   python club_watcher.py report   show when each club tends to drop tickets
   python club_watcher.py test     send a test notification
 """
@@ -32,6 +33,12 @@ from pathlib import Path
 # ---------------------------------------------------------------- settings --
 
 CHECK_EVERY_MINS = 3
+
+# Boost: check every minute during these weekly windows (UK time), when drops
+# are likely. Each is (day, start "HH:MM", hours), e.g. ("Mon", "12:00", 4).
+# A boost can also be started any time from GitHub's "Run workflow" button.
+BOOST_EVERY_SECS = 60
+BOOST_WINDOWS = []
 
 HERE = Path(__file__).resolve().parent
 
@@ -102,7 +109,12 @@ def fmt_iso(s):
 # where a ticket is {"name", "status", "on_sale_at"(optional)}.
 # status is one of: available, sold_out, scheduled, off_sale
 
+_fixr_seen = {}  # event id -> tickets, so TP's organiser and venue pages share one lookup
+
+
 def fixr_event_tickets(event_id):
+    if event_id in _fixr_seen:
+        return _fixr_seen[event_id]
     d = json.loads(fetch(f"https://api.fixr.co/api/v2/app/event/{event_id}",
                          accept="application/json"))
     tickets = {}
@@ -114,6 +126,7 @@ def fixr_event_tickets(event_id):
         else:
             status = "available"
         tickets[str(t["id"])] = {"name": t["name"], "status": status}
+    _fixr_seen[event_id] = tickets
     return tickets
 
 
@@ -329,6 +342,7 @@ def compare(club, old, new, first_run):
 
 
 def check(state):
+    _fixr_seen.clear()
     last = state.get("_last_check")
     stale = last is not None and time.time() - last > CATCH_UP_AFTER_HOURS * 3600
     if stale:
@@ -357,6 +371,31 @@ def load_state():
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
     return {}
+
+
+def boost_window_end(now=None):
+    """If we're inside one of the BOOST_WINDOWS, return when it ends."""
+    now = now or dt.datetime.now()
+    for day, start, hours in BOOST_WINDOWS:
+        h, m = map(int, start.split(":"))
+        # Check this week's and last week's occurrence, for windows past midnight
+        for weeks_back in (0, 1):
+            days_back = (now.weekday() - time.strptime(day[:3], "%a").tm_wday) % 7 + 7 * weeks_back
+            begin = (now - dt.timedelta(days=days_back)).replace(hour=h, minute=m, second=0,
+                                                                  microsecond=0)
+            end = begin + dt.timedelta(hours=hours)
+            if begin <= now < end:
+                return end
+    return None
+
+
+def boost(state, until):
+    log(f"BOOST - checking every {BOOST_EVERY_SECS}s until {until:%a %H:%M}", "notice")
+    while True:
+        check(state)
+        if dt.datetime.now() + dt.timedelta(seconds=BOOST_EVERY_SECS) >= until:
+            return
+        time.sleep(BOOST_EVERY_SECS)
 
 
 # ------------------------------------------------------------------- report --
@@ -414,7 +453,14 @@ def main():
         notify("Club Watcher test", "If you can see this, alerts are working.",
                "https://fixr.co/organiser/timepiece")
     elif cmd == "once":
-        check(load_state())
+        # One check, or a run of checks if boosting (button or weekly window).
+        # GitHub stops jobs after 6h, so a boost is capped at 5.5h per run.
+        hours = float(os.environ.get("BOOST_HOURS") or 0)
+        until = (dt.datetime.now() + dt.timedelta(hours=hours)) if hours else boost_window_end()
+        if until:
+            boost(load_state(), min(until, dt.datetime.now() + dt.timedelta(hours=5.5)))
+        else:
+            check(load_state())
     else:
         # Only one copy may run, or everyone gets every alert twice
         lock = socket.socket()
@@ -428,7 +474,10 @@ def main():
         state = load_state()
         while True:
             check(state)
-            time.sleep(CHECK_EVERY_MINS * 60 + random.randint(-20, 20))
+            if boost_window_end():
+                time.sleep(BOOST_EVERY_SECS)
+            else:
+                time.sleep(CHECK_EVERY_MINS * 60 + random.randint(-20, 20))
 
 
 if __name__ == "__main__":

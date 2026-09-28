@@ -3,10 +3,17 @@ name: Watch for ticket drops
 on:
   schedule:
     - cron: "*/5 * * * *"  # GitHub often runs these late at busy times
-  workflow_dispatch:        # "Run workflow" button for testing
+  workflow_dispatch:        # "Run workflow" button: boost, or a one-off check
+    inputs:
+      boost_hours:
+        description: "Boost: check every minute for this many hours (0 = just check once)"
+        type: choice
+        options: ["0", "1", "2", "3", "4", "5"]
+        default: "2"
 
+# Boosts get their own lane, so a queued scheduled check can't cancel one
 concurrency:
-  group: watch
+  group: ${{ github.event_name == 'workflow_dispatch' && 'boost' || 'watch' }}
   cancel-in-progress: false
 
 permissions:
@@ -15,7 +22,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350  # boosts run for hours; normal checks take ~30s
     env:
       TZ: Europe/London
     steps:
@@ -37,6 +44,7 @@ jobs:
       - name: Check clubs
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          BOOST_HOURS: ${{ inputs.boost_hours || '0' }}
         run: python club_watcher.py once
 
       - uses: actions/cache/save@v6
