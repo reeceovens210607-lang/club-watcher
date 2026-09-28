@@ -34,11 +34,14 @@ from pathlib import Path
 
 CHECK_EVERY_MINS = 3
 
-# Boost: check every minute during these weekly windows (UK time), when drops
-# are likely. Each is (day, start "HH:MM", hours), e.g. ("Mon", "12:00", 4).
-# A boost can also be started any time from GitHub's "Run workflow" button.
+# Boost: check every minute during these windows (UK time), when drops are
+# likely. Each is (day or "Daily", start "HH:MM", hours, clubs to boost); other
+# clubs keep their normal pace. A boost of every club can also be started any
+# time from GitHub's "Run workflow" button.
 BOOST_EVERY_SECS = 60
-BOOST_WINDOWS = []
+BOOST_WINDOWS = [
+    ("Daily", "11:00", 5, ["Timepiece"]),
+]
 
 HERE = Path(__file__).resolve().parent
 
@@ -341,13 +344,16 @@ def compare(club, old, new, first_run):
                 log(f"sold out: {club} {ev['name']} - {t['name']}")
 
 
-def check(state):
+def check(state, clubs=None):
+    """Check every source, or only those for the given clubs."""
     _fixr_seen.clear()
     last = state.get("_last_check")
     stale = last is not None and time.time() - last > CATCH_UP_AFTER_HOURS * 3600
     if stale:
         log(f"last check was over {CATCH_UP_AFTER_HOURS}h ago - catching up quietly")
     for src in SOURCES:
+        if clubs and src["club"] not in clubs:
+            continue
         src_id = f"{src['kind']}:{src.get('slug') or src.get('id') or src.get('path')}"
         try:
             events = SCRAPERS[src["kind"]](src)
@@ -373,26 +379,48 @@ def load_state():
     return {}
 
 
-def boost_window_end(now=None):
-    """If we're inside one of the BOOST_WINDOWS, return when it ends."""
+def active_boost(now=None):
+    """If we're inside one of the BOOST_WINDOWS, return (end time, clubs)."""
     now = now or dt.datetime.now()
-    for day, start, hours in BOOST_WINDOWS:
+    for day, start, hours, clubs in BOOST_WINDOWS:
         h, m = map(int, start.split(":"))
-        # Check this week's and last week's occurrence, for windows past midnight
-        for weeks_back in (0, 1):
-            days_back = (now.weekday() - time.strptime(day[:3], "%a").tm_wday) % 7 + 7 * weeks_back
+        # Look back far enough to catch a window that started before midnight
+        if day == "Daily":
+            candidates = (0, 1)
+        else:
+            d = (now.weekday() - time.strptime(day[:3], "%a").tm_wday) % 7
+            candidates = (d, d + 7)
+        for days_back in candidates:
             begin = (now - dt.timedelta(days=days_back)).replace(hour=h, minute=m, second=0,
                                                                   microsecond=0)
             end = begin + dt.timedelta(hours=hours)
             if begin <= now < end:
-                return end
+                return end, clubs
     return None
 
 
-def boost(state, until):
-    log(f"BOOST - checking every {BOOST_EVERY_SECS}s until {until:%a %H:%M}", "notice")
+class Pacer:
+    """During a boost, checks the boosted clubs every minute but still checks
+    everything else only every CHECK_EVERY_MINS."""
+
+    def __init__(self):
+        self.last_full = 0
+
+    def check(self, state, clubs):
+        if clubs and time.time() - self.last_full < CHECK_EVERY_MINS * 60:
+            check(state, clubs)
+        else:
+            check(state)
+            self.last_full = time.time()
+
+
+def boost(state, until, clubs=None):
+    who = ", ".join(clubs) if clubs else "all clubs"
+    log(f"BOOST ({who}) - checking every {BOOST_EVERY_SECS}s until {until:%a %H:%M}",
+        "notice")
+    pacer = Pacer()
     while True:
-        check(state)
+        pacer.check(state, clubs)
         if dt.datetime.now() + dt.timedelta(seconds=BOOST_EVERY_SECS) >= until:
             return
         time.sleep(BOOST_EVERY_SECS)
@@ -456,9 +484,11 @@ def main():
         # One check, or a run of checks if boosting (button or weekly window).
         # GitHub stops jobs after 6h, so a boost is capped at 5.5h per run.
         hours = float(os.environ.get("BOOST_HOURS") or 0)
-        until = (dt.datetime.now() + dt.timedelta(hours=hours)) if hours else boost_window_end()
-        if until:
-            boost(load_state(), min(until, dt.datetime.now() + dt.timedelta(hours=5.5)))
+        window = ((dt.datetime.now() + dt.timedelta(hours=hours), None) if hours
+                  else active_boost())
+        if window:
+            until, clubs = window
+            boost(load_state(), min(until, dt.datetime.now() + dt.timedelta(hours=5.5)), clubs)
         else:
             check(load_state())
     else:
@@ -472,9 +502,11 @@ def main():
         log(f"Club Watcher running - checking every {CHECK_EVERY_MINS} mins. "
             "Close this window to stop.")
         state = load_state()
+        pacer = Pacer()
         while True:
-            check(state)
-            if boost_window_end():
+            window = active_boost()
+            pacer.check(state, window[1] if window else None)
+            if active_boost():
                 time.sleep(BOOST_EVERY_SECS)
             else:
                 time.sleep(CHECK_EVERY_MINS * 60 + random.randint(-20, 20))
