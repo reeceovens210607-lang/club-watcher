@@ -69,9 +69,16 @@ HERE = Path(__file__).resolve().parent
 # topic. Anyone who knows the name can see the alerts, so it's kept out of the
 # code: the laptop reads ntfy_topic.txt (never uploaded) and GitHub reads the
 # NTFY_TOPIC secret.
-_topic_file = HERE / "ntfy_topic.txt"
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC") or (
-    _topic_file.read_text().strip() if _topic_file.exists() else "")
+def _private(name, filename):
+    path = HERE / filename
+    return os.environ.get(name) or (path.read_text().strip() if path.exists() else "")
+
+
+NTFY_TOPIC = _private("NTFY_TOPIC", "ntfy_topic.txt")
+# ntfy limits messages per internet address; GitHub shares addresses with other
+# users, so alerts are sent with our own (free) account's token instead
+NTFY_TOKEN = _private("NTFY_TOKEN", "ntfy_token.txt")
+NTFY_AUTH = {"Authorization": f"Bearer {NTFY_TOKEN}"} if NTFY_TOKEN else {}
 
 # If the last check was longer ago than this (laptop was off, GitHub paused),
 # quietly catch up instead of alerting about stale drops. Must stay under 12h,
@@ -107,9 +114,9 @@ def log(msg, level=None):
         f.write(line + "\n")
 
 
-def fetch(url, accept="text/html"):
+def fetch(url, accept="text/html", headers=None):
     req = urllib.request.Request(url, headers={
-        "User-Agent": UA, "Accept": accept, "Accept-Language": "en-GB"})
+        "User-Agent": UA, "Accept": accept, "Accept-Language": "en-GB", **(headers or {})})
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode("utf-8", errors="replace")
 
@@ -264,7 +271,7 @@ def already_sent(title, message):
     already sent this exact alert in the last 12 hours."""
     try:
         history = fetch(f"https://ntfy.sh/{NTFY_TOPIC}/json?poll=1&since=12h",
-                        accept="application/json")
+                        accept="application/json", headers=NTFY_AUTH)
     except Exception:
         return False
     for line in history.splitlines():
@@ -284,7 +291,7 @@ def notify(title, message, url=None, main_night=False):
             log("  (phone alert already sent by the other watcher)")
             return
         try:
-            headers = {"Title": title,
+            headers = {**NTFY_AUTH, "Title": title,
                        "Priority": "urgent" if main_night else "default",
                        "Tags": "star,tickets" if main_night else "tickets"}
             if url:

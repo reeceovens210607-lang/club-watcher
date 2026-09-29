@@ -118,34 +118,29 @@ async function scrapeAll(log, minute, known) {
 
 // ----------------------------------------------------------- notifications --
 
-async function alreadySent(topic, title, message) {
-  try {
-    const history = await fetchText(`https://ntfy.sh/${topic}/json?poll=1&since=12h`,
-      "application/json");
-    return history.split("\n").filter(Boolean).map((l) => JSON.parse(l))
-      .some((m) => m.title === title && m.message === message);
-  } catch {
-    return false;
-  }
-}
+// ntfy blocks Cloudflare's shared addresses once other people's messages use up
+// their daily allowance, so the alert is handed to a GitHub workflow
+// (.github/workflows/alert.yml), which sends it from GitHub and also skips it
+// if the laptop or the GitHub checker has already sent the same one.
+const ALERT_WORKFLOW =
+  "https://api.github.com/repos/reeceovens210607-lang/club-watcher/actions/workflows/alert.yml/dispatches";
 
 async function notify(env, log, title, message, url, main) {
   title = title.replace(/[^\x00-\x7F]/g, "");
   log(`ALERT ${main ? "[MAIN NIGHT] " : ""}${title} - ${message}`);
-  if (!env.NTFY_TOPIC) return;
-  if (await alreadySent(env.NTFY_TOPIC, title, message)) {
-    log("  (already sent by another watcher)");
-    return;
-  }
-  const headers = {
-    Title: title, Priority: main ? "urgent" : "default",
-    Tags: main ? "star,tickets" : "tickets",
-  };
-  if (url) {
-    headers.Click = url;
-    headers.Actions = `view, Get tickets, ${url}`;
-  }
-  await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, { method: "POST", headers, body: message });
+  if (!env.GH_TOKEN) return;
+  const r = await fetch(ALERT_WORKFLOW, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GH_TOKEN}`, Accept: "application/vnd.github+json",
+      "User-Agent": "club-watcher", "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ref: "main",
+      inputs: { title, message, url: url || "", main_night: String(main) },
+    }),
+  });
+  if (!r.ok) log(`phone alert failed: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
 }
 
 // ------------------------------------------------------------- change check --
@@ -187,6 +182,14 @@ async function compare(env, log, old, now, quiet) {
 async function run(env, scheduledTime) {
   const lines = [];
   const log = (m) => { lines.push(m); console.log(m); };
+
+  // TEMP: one-off test alert, removed after testing
+  if (await env.STATE.get("send_test")) {
+    await env.STATE.delete("send_test");
+    await notify(env, log, "Test alert from Cloudflare",
+      "The every-minute watcher can reach your phone. Nothing to do.",
+      "https://fixr.co/organiser/timepiece", false);
+  }
 
   const saved = JSON.parse((await env.STATE.get("state")) || "null");
   const minute = Math.floor(scheduledTime / 60000);

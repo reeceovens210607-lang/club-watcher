@@ -44,6 +44,7 @@ jobs:
       - name: Check clubs
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           BOOST_HOURS: ${{ inputs.boost_hours || '0' }}
         run: python club_watcher.py once
 

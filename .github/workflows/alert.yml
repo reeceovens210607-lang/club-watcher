@@ -1,0 +1,42 @@
+name: Send alert
+
+# Cloudflare spots drops every minute, but ntfy blocks Cloudflare's shared
+# addresses, so Cloudflare asks this workflow to send the phone alert instead.
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        required: true
+      message:
+        required: true
+      url:
+        required: false
+      main_night:
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inputs go in through env vars, never pasted into the script itself
+      - name: Send
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          TITLE: ${{ inputs.title }}
+          MESSAGE: ${{ inputs.message }}
+          URL: ${{ inputs.url }}
+          MAIN_NIGHT: ${{ inputs.main_night }}
+        run: |
+          python3 -c "
+          import os, club_watcher as c
+          c.notify(os.environ['TITLE'], os.environ['MESSAGE'], os.environ['URL'] or None,
+                   os.environ['MAIN_NIGHT'] == 'true')
+          "

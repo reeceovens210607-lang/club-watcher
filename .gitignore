@@ -1,5 +1,6 @@
 # Private or per-machine - never upload
 ntfy_topic.txt
+ntfy_token.txt
 state.json
 drops.csv
 watcher.log
