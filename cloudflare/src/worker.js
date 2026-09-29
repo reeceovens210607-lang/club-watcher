@@ -183,14 +183,6 @@ async function run(env, scheduledTime) {
   const lines = [];
   const log = (m) => { lines.push(m); console.log(m); };
 
-  // TEMP: one-off test alert, removed after testing
-  if (await env.STATE.get("send_test")) {
-    await env.STATE.delete("send_test");
-    await notify(env, log, "Test alert from Cloudflare",
-      "The every-minute watcher can reach your phone. Nothing to do.",
-      "https://fixr.co/organiser/timepiece", false);
-  }
-
   const saved = JSON.parse((await env.STATE.get("state")) || "null");
   const minute = Math.floor(scheduledTime / 60000);
   const events = await scrapeAll(log, minute, saved?.events || {});
