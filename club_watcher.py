@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -271,7 +272,7 @@ def already_sent(title, message):
     already sent this exact alert in the last 12 hours."""
     try:
         history = fetch(f"https://ntfy.sh/{NTFY_TOPIC}/json?poll=1&since=12h",
-                        accept="application/json", headers=NTFY_AUTH)
+                        accept="application/json")
     except Exception:
         return False
     for line in history.splitlines():
@@ -297,11 +298,22 @@ def notify(title, message, url=None, main_night=False):
             if url:
                 headers["Click"] = url
                 headers["Actions"] = f"view, Get tickets, {url}"
-            req = urllib.request.Request(f"https://ntfy.sh/{NTFY_TOPIC}",
-                                         data=message.encode("utf-8"), headers=headers)
-            urllib.request.urlopen(req, timeout=15)
+            try:
+                _send(headers, message)
+            except urllib.error.HTTPError as ex:
+                if ex.code != 401 or not NTFY_AUTH:
+                    raise
+                # Token revoked or account deleted: the channel is public, so send without it
+                log("ntfy token rejected - sending without it")
+                _send({k: v for k, v in headers.items() if k != "Authorization"}, message)
         except Exception as ex:
             log(f"phone alert failed: {ex}")
+
+
+def _send(headers, message):
+    req = urllib.request.Request(f"https://ntfy.sh/{NTFY_TOPIC}",
+                                 data=message.encode("utf-8"), headers=headers)
+    urllib.request.urlopen(req, timeout=15)
 
 
 def _toast(title, message, url):
