@@ -28,9 +28,11 @@ const MAIN_NIGHTS = [
   ["Timepiece", "Sat", ["SATURDAY"], "TP Saturday"],
 ];
 
-// Promoters who post ticket codes on their Instagram story (Fixr organiser id ->
-// handle). Keep in sync with INSTAGRAM in club_watcher.py.
-const INSTAGRAM = { 525: "4playuk" }; // 4Play: Cavern Tuesday, LOGIC, Dirty Beat
+// Promoters who post the general-release ticket code on their Instagram story
+// (Fixr organiser id -> handle), used when *every* ticket needs a code - that's
+// Cavern Tuesday; LOGIC only codes its rep tickets. Keep in sync with
+// INSTAGRAM in club_watcher.py.
+const INSTAGRAM = { 525: "4playuk" }; // 4Play
 
 const CATCH_UP_AFTER_HOURS = 6;
 const UA =
@@ -98,11 +100,11 @@ async function eventDetails(id) {
   const d = JSON.parse(
     await fetchText(`https://api.fixr.co/api/v2/app/event/${id}`, "application/json"));
   const tickets = {};
-  let needsCode = false;
-  for (const t of d.tickets || []) {
+  const raw = d.tickets || [];
+  const needsCode = raw.length > 0 && raw.every((t) => t.promo_code_required);
+  for (const t of raw) {
     const status = t.expired ? "off_sale" : t.sold_out ? "sold_out"
       : t.not_yet_valid ? "not_yet" : "available";
-    needsCode = needsCode || Boolean(t.promo_code_required);
     const name = t.name + (t.promo_code_required ? " (code needed)" : "");
     tickets[String(t.id)] = { name, status };
   }

@@ -150,9 +150,11 @@ def fmt_iso(s):
 
 _fixr_seen = {}  # event id -> details, so TP's organiser and venue pages share one lookup
 
-# Promoters who post ticket codes on their Instagram story (Fixr organiser id ->
-# handle). Keep in sync with INSTAGRAM in cloudflare/src/worker.js.
-INSTAGRAM = {525: "4playuk"}  # 4Play: Cavern Tuesday, LOGIC, Dirty Beat
+# Promoters who post the general-release ticket code on their Instagram story
+# (Fixr organiser id -> handle), used when *every* ticket needs a code - that's
+# Cavern Tuesday; LOGIC only codes its rep tickets. Keep in sync with
+# INSTAGRAM in cloudflare/src/worker.js.
+INSTAGRAM = {525: "4playuk"}  # 4Play
 
 
 def drop_note(description):
@@ -172,7 +174,8 @@ def fixr_event_details(event_id):
     d = json.loads(fetch(f"https://api.fixr.co/api/v2/app/event/{event_id}",
                          accept="application/json"))
     tickets = {}
-    needs_code = False
+    raw = d.get("tickets", [])
+    needs_code = bool(raw) and all(t.get("promo_code_required") for t in raw)
     for t in d.get("tickets", []):
         if t.get("expired"):
             status = "off_sale"
@@ -182,7 +185,6 @@ def fixr_event_details(event_id):
             status = "not_yet"  # listed, but the buy button isn't live yet
         else:
             status = "available"
-        needs_code = needs_code or bool(t.get("promo_code_required"))
         name = t["name"] + (" (code needed)" if t.get("promo_code_required") else "")
         tickets[str(t["id"])] = {"name": name, "status": status}
     organiser = (d.get("sales_account") or {}).get("id")
