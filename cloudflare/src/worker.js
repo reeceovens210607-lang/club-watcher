@@ -28,6 +28,10 @@ const MAIN_NIGHTS = [
   ["Timepiece", "Sat", ["SATURDAY"], "TP Saturday"],
 ];
 
+// Promoters who post ticket codes on their Instagram story (Fixr organiser id ->
+// handle). Keep in sync with INSTAGRAM in club_watcher.py.
+const INSTAGRAM = { 525: "4playuk" }; // 4Play: Cavern Tuesday, LOGIC, Dirty Beat
+
 const CATCH_UP_AFTER_HOURS = 6;
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -54,7 +58,13 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+// `day` is the night an event belongs to: one starting at 00:30 Wednesday is
+// Tuesday night. Must match night_of() in club_watcher.py.
 function ukParts(unixSecs) {
+  return { when: ukDate(unixSecs).when, day: ukDate(unixSecs - 6 * 3600).day };
+}
+
+function ukDate(unixSecs) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London", year: "numeric", month: "numeric", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -74,17 +84,32 @@ function mainNight(club, ev) {
 
 // ---------------------------------------------------------------- scraping --
 
-async function eventTickets(id) {
+// "drops 1pm today" from listings that say e.g. "TICKETS DROP 1PM TODAY".
+// Must match drop_note() in club_watcher.py.
+function dropNote(description) {
+  const m = (description || "").match(
+    /drops?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*[ap]m)(\s+(?:today|tomorrow))?/i);
+  if (!m) return null;
+  return "drops " + m[1].toLowerCase().replace(/\s+/g, "") +
+    (m[2] ? " " + m[2].trim().toLowerCase() : "");
+}
+
+async function eventDetails(id) {
   const d = JSON.parse(
     await fetchText(`https://api.fixr.co/api/v2/app/event/${id}`, "application/json"));
   const tickets = {};
+  let needsCode = false;
   for (const t of d.tickets || []) {
     const status = t.expired ? "off_sale" : t.sold_out ? "sold_out"
       : t.not_yet_valid ? "not_yet" : "available";
-    const name = t.name + (t.promo_code_required ? " (rep code needed)" : "");
+    needsCode = needsCode || Boolean(t.promo_code_required);
+    const name = t.name + (t.promo_code_required ? " (code needed)" : "");
     tickets[String(t.id)] = { name, status };
   }
-  return tickets;
+  return {
+    tickets, drop: dropNote(d.description),
+    code: needsCode ? INSTAGRAM[d.sales_account?.id] || null : null,
+  };
 }
 
 async function scrapeAll(log, minute, known) {
@@ -106,7 +131,8 @@ async function scrapeAll(log, minute, known) {
         // Each event gets its turn in a different minute, spreading the load
         const fresh = !prev || mainNight(ev.club, ev) ||
           (minute + e.id) % DETAIL_EVERY === 0 || prev.sig !== ev.sig;
-        ev.tickets = fresh ? await eventTickets(e.id) : prev.tickets;
+        Object.assign(ev, fresh ? await eventDetails(e.id)
+          : { tickets: prev.tickets, drop: prev.drop ?? null, code: prev.code ?? null });
         events[key] = ev;
       }
     } catch (ex) {
@@ -125,7 +151,7 @@ async function scrapeAll(log, minute, known) {
 const ALERT_WORKFLOW =
   "https://api.github.com/repos/reeceovens210607-lang/club-watcher/actions/workflows/alert.yml/dispatches";
 
-async function notify(env, log, title, message, url, main) {
+async function notify(env, log, title, message, url, main, code) {
   title = title.replace(/[^\x00-\x7F]/g, "");
   log(`ALERT ${main ? "[MAIN NIGHT] " : ""}${title} - ${message}`);
   if (!env.GH_TOKEN) return;
@@ -137,7 +163,7 @@ async function notify(env, log, title, message, url, main) {
     },
     body: JSON.stringify({
       ref: "main",
-      inputs: { title, message, url: url || "", main_night: String(main) },
+      inputs: { title, message, url: url || "", main_night: String(main), code: code || "" },
     }),
   });
   if (!r.ok) log(`phone alert failed: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -151,6 +177,7 @@ async function compare(env, log, old, now, quiet) {
     const label = mainNight(ev.club, ev);
     const main = label !== null;
     const who = label ? `${label} (${ev.club} ${ev.day})` : ev.club;
+    const codeNote = ev.code ? ` - code on @${ev.code} Instagram story` : "";
     const tickets = Object.values(ev.tickets);
 
     if (!prev) {
@@ -159,8 +186,9 @@ async function compare(env, log, old, now, quiet) {
       await notify(env, log, `${who}: new event!`,
         `${ev.name} (${ev.when})` + (onSale.length
           ? ` - ${onSale.length} ticket type(s) on sale NOW`
-          : " - not on sale yet, you'll get another alert when it is"),
-        ev.url, main);
+          : ev.drop ? ` - not on sale yet (${ev.drop})`
+          : " - not on sale yet, you'll get another alert when it is") + codeNote,
+        ev.url, main, ev.code);
       continue;
     }
 
@@ -173,7 +201,7 @@ async function compare(env, log, old, now, quiet) {
     for (const [names, what] of [[live, "live"], [back, "back"]]) {
       if (names.length) {
         await notify(env, log, `${who}: tickets ${what}!`,
-          `${ev.name} (${ev.when}) - ${names.join("; ")}`, ev.url, main);
+          `${ev.name} (${ev.when}) - ${names.join("; ")}${codeNote}`, ev.url, main, ev.code);
       }
     }
   }

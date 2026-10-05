@@ -14,6 +14,9 @@ on:
       main_night:
         required: false
         default: "false"
+      code:
+        description: "Instagram handle whose story has the ticket code"
+        required: false
 
 permissions:
   contents: read
@@ -34,9 +37,10 @@ jobs:
           MESSAGE: ${{ inputs.message }}
           URL: ${{ inputs.url }}
           MAIN_NIGHT: ${{ inputs.main_night }}
+          CODE: ${{ inputs.code }}
         run: |
           python3 -c "
           import os, club_watcher as c
           c.notify(os.environ['TITLE'], os.environ['MESSAGE'], os.environ['URL'] or None,
-                   os.environ['MAIN_NIGHT'] == 'true')
+                   os.environ['MAIN_NIGHT'] == 'true', os.environ['CODE'] or None)
           "

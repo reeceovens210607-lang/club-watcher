@@ -129,6 +129,12 @@ def next_data(page):
     return json.loads(m.group(1))["props"]["pageProps"]
 
 
+def night_of(ts):
+    """The night an event belongs to: one starting at 00:30 Wednesday is Tuesday
+    night. Must match the night calculation in cloudflare/src/worker.js."""
+    return dt.datetime.fromtimestamp(ts - 6 * 3600).strftime("%a")
+
+
 def fmt_time(ts):
     return dt.datetime.fromtimestamp(ts).strftime("%a %d %b %H:%M")
 
@@ -142,15 +148,31 @@ def fmt_iso(s):
 # where a ticket is {"name", "status", "on_sale_at"(optional)}.
 # status is one of: available, sold_out, scheduled, off_sale
 
-_fixr_seen = {}  # event id -> tickets, so TP's organiser and venue pages share one lookup
+_fixr_seen = {}  # event id -> details, so TP's organiser and venue pages share one lookup
+
+# Promoters who post ticket codes on their Instagram story (Fixr organiser id ->
+# handle). Keep in sync with INSTAGRAM in cloudflare/src/worker.js.
+INSTAGRAM = {525: "4playuk"}  # 4Play: Cavern Tuesday, LOGIC, Dirty Beat
 
 
-def fixr_event_tickets(event_id):
+def drop_note(description):
+    """'drops 1pm today' from listings that say e.g. 'TICKETS DROP 1PM TODAY'.
+    Must match dropNote() in cloudflare/src/worker.js."""
+    m = re.search(r"drops?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*[ap]m)(\s+(?:today|tomorrow))?",
+                  description or "", re.I)
+    if not m:
+        return None
+    return "drops " + re.sub(r"\s+", "", m.group(1).lower()) + (
+        " " + m.group(2).strip().lower() if m.group(2) else "")
+
+
+def fixr_event_details(event_id):
     if event_id in _fixr_seen:
         return _fixr_seen[event_id]
     d = json.loads(fetch(f"https://api.fixr.co/api/v2/app/event/{event_id}",
                          accept="application/json"))
     tickets = {}
+    needs_code = False
     for t in d.get("tickets", []):
         if t.get("expired"):
             status = "off_sale"
@@ -160,10 +182,14 @@ def fixr_event_tickets(event_id):
             status = "not_yet"  # listed, but the buy button isn't live yet
         else:
             status = "available"
-        name = t["name"] + (" (rep code needed)" if t.get("promo_code_required") else "")
+        needs_code = needs_code or bool(t.get("promo_code_required"))
+        name = t["name"] + (" (code needed)" if t.get("promo_code_required") else "")
         tickets[str(t["id"])] = {"name": name, "status": status}
-    _fixr_seen[event_id] = tickets
-    return tickets
+    organiser = (d.get("sales_account") or {}).get("id")
+    details = {"tickets": tickets, "drop": drop_note(d.get("description")),
+               "code": INSTAGRAM.get(organiser) if needs_code else None}
+    _fixr_seen[event_id] = details
+    return details
 
 
 def fixr_events(raw_events):
@@ -172,9 +198,9 @@ def fixr_events(raw_events):
         out[f"fixr:{e['id']}"] = {
             "name": e["name"],
             "when": fmt_time(e["openTime"]),
-            "day": dt.datetime.fromtimestamp(e["openTime"]).strftime("%a"),
+            "day": night_of(e["openTime"]),
             "url": f"https://fixr.co/event/{e['routingPart']}",
-            "tickets": fixr_event_tickets(e["id"]),
+            **fixr_event_details(e["id"]),
         }
         time.sleep(1)
     return out
@@ -226,7 +252,7 @@ def scrape_fatsoma_page(src):
         out[f"fatsoma:{e['id']}"] = {
             "name": a["name"],
             "when": fmt_iso(a["starts-at"]),
-            "day": dt.datetime.fromisoformat(a["starts-at"]).astimezone().strftime("%a"),
+            "day": night_of(dt.datetime.fromisoformat(a["starts-at"]).timestamp()),
             "url": f"https://www.fatsoma.com/e/{a['vanity-name']}/{a.get('seo-name') or ''}",
             "tickets": tickets,
         }
@@ -282,11 +308,13 @@ def already_sent(title, message):
     return False
 
 
-def notify(title, message, url=None, main_night=False):
+def notify(title, message, url=None, main_night=False, code=None):
+    """code: Instagram handle whose story has the ticket code, for a "Get code" button."""
     title = title.encode("ascii", "ignore").decode()  # ntfy titles must be plain text
     log(f"ALERT  {'[MAIN NIGHT] ' if main_night else ''}{title} - {message}")
     if sys.platform == "win32":
-        _toast(("⭐ " if main_night else "") + title, message, url)
+        _toast(("⭐ " if main_night else "") + title, message,
+               f"https://www.instagram.com/{code}/" if code else url)
     if NTFY_TOPIC:
         if already_sent(title, message):
             log("  (phone alert already sent by the other watcher)")
@@ -298,6 +326,11 @@ def notify(title, message, url=None, main_night=False):
             if url:
                 headers["Click"] = url
                 headers["Actions"] = f"view, Get tickets, {url}"
+            if code:
+                ig = f"https://www.instagram.com/{code}/"
+                headers["Click"] = ig  # the code comes first
+                headers["Actions"] = f"view, Get code, {ig}" + (
+                    f"; view, Get tickets, {url}" if url else "")
             try:
                 _send(headers, message)
             except urllib.error.HTTPError as ex:
@@ -360,6 +393,8 @@ def compare(club, old, new, first_run):
         label = main_night(club, ev)
         main = label is not None
         who = f"{label} ({club} {ev.get('day', '')})" if label else club
+        code = ev.get("code")
+        code_note = f" - code on @{code} Instagram story" if code else ""
         if prev is None:
             if first_run:
                 continue
@@ -368,8 +403,9 @@ def compare(club, old, new, first_run):
             notify(f"{who}: new event!",
                    f"{ev['name']} ({ev['when']})" +
                    (f" - {len(on_sale)} ticket type(s) on sale NOW" if on_sale else
-                    " - not on sale yet, you'll get another alert when it is"),
-                   ev["url"], main)
+                    f" - not on sale yet ({ev['drop']})" if ev.get("drop") else
+                    " - not on sale yet, you'll get another alert when it is") + code_note,
+                   ev["url"], main, code)
             for t in on_sale:
                 record_drop(club, ev, t["name"], "on_sale", t.get("on_sale_at"))
             for t in ev["tickets"].values():
@@ -398,8 +434,8 @@ def compare(club, old, new, first_run):
         for names, what in ((live, "live"), (back, "back")):
             if names:
                 notify(f"{who}: tickets {what}!",
-                       f"{ev['name']} ({ev['when']}) - " + "; ".join(names),
-                       ev["url"], main)
+                       f"{ev['name']} ({ev['when']}) - " + "; ".join(names) + code_note,
+                       ev["url"], main, code)
 
 
 def check(state, clubs=None):
