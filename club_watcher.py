@@ -49,7 +49,8 @@ BOOST_WINDOWS = []
 # nights come through as normal notifications.
 MAIN_NIGHTS = [
     ("Fever", "Mon", ["LOGIC"], "LOGIC"),
-    ("Cavern", "Tue", ["CAVERN TUESDAY"], "Cavern Tuesday"),
+    # Name only: societies also hire Cavern on Tuesdays (e.g. a surf club social)
+    ("Cavern", None, ["CAVERN TUESDAY"], "Cavern Tuesday"),
     ("Timepiece", "Wed", ["LEGENDS", "AU WEDNESDAY"], "TP Wednesday"),
     ("Timepiece", "Fri", ["SKETCH"], "SKETCH"),
     ("Timepiece", "Sat", ["SATURDAY"], "TP Saturday"),
@@ -60,7 +61,7 @@ def main_night(club, ev):
     """The label of the house night this event is, or None."""
     name = ev["name"].upper()
     for n_club, day, words, label in MAIN_NIGHTS:
-        if n_club == club and (ev.get("day") == day or any(w in name for w in words)):
+        if n_club == club and ((day and ev.get("day") == day) or any(w in name for w in words)):
             return label
     return None
 

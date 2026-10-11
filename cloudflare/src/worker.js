@@ -22,7 +22,8 @@ const DETAIL_EVERY = 5;
 // Keep in sync with MAIN_NIGHTS in club_watcher.py
 const MAIN_NIGHTS = [
   ["Fever", "Mon", ["LOGIC"], "LOGIC"],
-  ["Cavern", "Tue", ["CAVERN TUESDAY"], "Cavern Tuesday"],
+  // Name only: societies also hire Cavern on Tuesdays (e.g. a surf club social)
+  ["Cavern", null, ["CAVERN TUESDAY"], "Cavern Tuesday"],
   ["Timepiece", "Wed", ["LEGENDS", "AU WEDNESDAY"], "TP Wednesday"],
   ["Timepiece", "Fri", ["SKETCH"], "SKETCH"],
   ["Timepiece", "Sat", ["SATURDAY"], "TP Saturday"],
@@ -79,7 +80,7 @@ function ukDate(unixSecs) {
 function mainNight(club, ev) {
   const name = ev.name.toUpperCase();
   for (const [nClub, day, words, label] of MAIN_NIGHTS) {
-    if (nClub === club && (ev.day === day || words.some((w) => name.includes(w)))) return label;
+    if (nClub === club && ((day && ev.day === day) || words.some((w) => name.includes(w)))) return label;
   }
   return null;
 }
